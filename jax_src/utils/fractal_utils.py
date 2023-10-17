@@ -1,13 +1,12 @@
 import jax
 import jax.numpy as jnp
-import numpy as np
-from utils.transforms import (affine_contraction, chunk_from_id,
-                                faster_unpartition_img, partition_img,
-                                reduce)
+from jax_src.utils.transforms import affine_contraction, chunk_from_id, faster_unpartition_img, partition_img, reduce
 from jax import vmap
 from tqdm import tqdm
 
+
 BASE_KEY = jax.random.PRNGKey(0)
+
 
 def get_noise_schedule(times=[0], key=BASE_KEY, H=32, W=32, noise_type=None, image=None):
     if noise_type is None:

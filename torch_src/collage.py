@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch_src.utils import img_to_patches, patches_to_img, vmapped_rotate
 
 from einops import rearrange, repeat
@@ -40,7 +39,6 @@ class CollageOperator2d(nn.Module):
         # Notices how the pooling factors do not change if one decodes at higher resolutions, since both domain and range 
         # patch sizes are multiplied by the same integer.
         self.pool = nn.AvgPool3d(kernel_size=(1, self.h_factors, self.w_factors), stride=(1, self.h_factors, self.w_factors))
-
 
     def decode_step(self, z, weight, bias, superres_factor):
         """Single Collage Operator step. Performs the steps described in:

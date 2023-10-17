@@ -6,3 +6,6 @@ wandb
 optax 
 flax
 matplotlib
+einops
+torchvision
+timm
