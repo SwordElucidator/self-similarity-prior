@@ -87,8 +87,14 @@ if __name__ == '__main__':
     # experiment.calc_size_ratio(collage_operator, norm_im)  # 0.12
     # experiment.plot(collage_operator, norm_im)
 
+    # collage_operator, norm_im = experiment.train(
+    #     'einstein375.png', range_patch_height=3, range_patch_width=3,
+    # )
+    # experiment.calc_size_ratio(collage_operator, norm_im)  # 0.3333333
+    # experiment.plot(collage_operator, norm_im)
+
     collage_operator, norm_im = experiment.train(
-        'einstein375.png', range_patch_height=3, range_patch_width=3,
+        'einstein375.png', range_patch_height=25, range_patch_width=25,
     )
-    experiment.calc_size_ratio(collage_operator, norm_im)  # 0.3333333
+    experiment.calc_size_ratio(collage_operator, norm_im)  # 0.0048
     experiment.plot(collage_operator, norm_im)
