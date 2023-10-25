@@ -22,17 +22,19 @@ class CollageOperator2d(nn.Module):
             use_augmentations (bool, optional): Use augmentations of domain square patches at each decoding iteration. Defaults to `False`.
         """
         super().__init__()
-        self.dh, self.dw = dh, dw
+        self.dh, self.dw = dh, dw  # height and width of domain patches
         if self.dh is None: self.dh = res
         if self.dw is None: self.dw = res
 
         # 5 refers to the 5 copies of domain patches generated with the current choice of augmentations:
         # 3 rotations (90, 180, 270), horizontal flips and vertical flips.
         self.n_aug_transforms = 5 if use_augmentations else 1
+        # TODO NOTES: currently they have limited the number of augmentations on some of the behaviors,
+        #  but this is not enough for 3D transformations
 
         # precompute useful quantities related to the partitioning scheme into patches, given
         # the desired `dh`, `dw`, `rh`, `rw`. 
-        partition_info = self.collage_partition_info(res, self.dh, self.dw, rh, rw)
+        partition_info = self.__collage_partition_info(res, self.dh, self.dw, rh, rw)
         self.n_dh, self.n_dw, self.n_rh, self.n_rw, self.h_factors, self.w_factors, self.n_domains, self.n_ranges = partition_info
         
         # At each step of the collage, all (source) domain patches are pooled down to the size of range (target) patches.
@@ -40,7 +42,7 @@ class CollageOperator2d(nn.Module):
         # patch sizes are multiplied by the same integer.
         self.pool = nn.AvgPool3d(kernel_size=(1, self.h_factors, self.w_factors), stride=(1, self.h_factors, self.w_factors))
 
-    def decode_step(self, z, weight, bias, superres_factor):
+    def _decode_step(self, z, weight, bias, superres_factor):
         """Single Collage Operator step. Performs the steps described in:
         https://arxiv.org/pdf/2204.07673.pdf (Def. 3.1, Figure 2).
         """
@@ -73,28 +75,36 @@ class CollageOperator2d(nn.Module):
         return domains
 
     def forward(self, x, co_w, co_bias, decode_steps=20, superres_factor=1):
-        B, C, H, W = x.shape
+        """
+        x: (batch, channels, height, width)
+        co_w: (batch, channels, domain, range)
+        co_bias: (batch, channels, range)
+        """
+        B, C, H, W = x.shape  # batch, channels, height, width
         # It does not matter which initial condition is chosen, so long as the dimensions match.
         # The fixed-point of a Collage Operator is uniquely determined* by the fractal code
         # *: and auxiliary learned patches, if any.
         z = torch.randn(B, C, H * superres_factor, W * superres_factor).to(x.device)
+        # superres_factor > 1 allows to decode at higher resolutions than the input resolution.
         for _ in range(decode_steps):
-            z = self.decode_step(z, co_w, co_bias, superres_factor)
+            z = self._decode_step(z, co_w, co_bias, superres_factor)
         return z
 
-    def collage_partition_info(self, input_res, dh, dw, rh, rw):
+    def __collage_partition_info(self, input_res, dh, dw, rh, rw):
         """
         Computes auxiliary information for the collage (number of source and target domains, and relative size factors)
         """
-        height = width = input_res
+        height = width = input_res  # TODO: this setup only work on squared images e.g. 375 * 375
         n_dh, n_dw = height // dh, width // dw
         n_domains = n_dh * n_dw
 
         # Adjust number of domain patches to include augmentations
         n_domains = n_domains + n_domains * self.n_aug_transforms # (3 rotations, hflip, vlip)
+        # Notes: for no augment, n_domains still equals to n_dh * n_dw * 2
 
-        h_factors, w_factors = dh // rh, dw // rw
-        n_rh, n_rw = input_res // rh, input_res // rw    
+        # calculate the factor of domain's height to range's height
+        h_factors, w_factors = dh // rh, dw // rw  # Notes: this limit the domain size / range size to be integer
+        n_rh, n_rw = input_res // rh, input_res // rw
         n_ranges = n_rh * n_rw
         return n_dh, n_dw, n_rh, n_rw, h_factors, w_factors, n_domains, n_ranges
 
