@@ -1,11 +1,17 @@
+import os
 import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
-from torch_src.collage import NeuralCollageOperator2d
 import tensorflow as tf
-import os
+
+from pathlib import Path
+import sys
+path_root = Path(__file__).parents[1]
+sys.path.append(str(path_root))  # handle system path
+
+from torch_src.collage import NeuralCollageOperator2d
 
 
 experiment_setups = {
