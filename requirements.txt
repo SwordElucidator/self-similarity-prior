@@ -7,7 +7,9 @@ optax==0.1.4
 flax==0.7.4
 matplotlib==3.7.2
 einops==0.7.0
-torchvision==0.15.2a0
+torchvision==0.15.2
 timm==0.9.7
 tensorflow==2.14.0
 jaxlib==0.4.18
+requests==2.31.0
+jupyter
