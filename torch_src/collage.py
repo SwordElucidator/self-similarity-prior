@@ -28,9 +28,10 @@ class CollageOperator2d(nn.Module):
 
         # 5 refers to the 5 copies of domain patches generated with the current choice of augmentations:
         # 3 rotations (90, 180, 270), horizontal flips and vertical flips.
-        self.n_aug_transforms = 5 if use_augmentations else 1
+        self.n_aug_transforms = 5 if use_augmentations else 0
         # TODO NOTES: currently they have limited the number of augmentations on some of the behaviors,
         #  but this is not enough for 3D transformations
+        # TODO: why 1 if not use augmentations? why not 0?
 
         # precompute useful quantities related to the partitioning scheme into patches, given
         # the desired `dh`, `dw`, `rh`, `rw`. 
@@ -49,18 +50,32 @@ class CollageOperator2d(nn.Module):
 
         # Given the current iterate `z`, we split it into `n_domains` domain patches.
         domains = img_to_patches(z, patch_h=self.dh * superres_factor, patch_w=self.dw * superres_factor)
-
+        # domains: (batch, channels, n_dw * n_dh, dh, dw)
         # Pool domains (pre augmentation) for compatibility with range patches.
-        pooled_domains = self.pool(domains) 
+        pooled_domains = self.pool(domains)  # shrink domains to range size
 
         # If needed, produce additional candidate domain patches as augmentations of existing domains.
         if self.n_aug_transforms > 1:
-            pooled_domains = self.generate_candidates(pooled_domains)
+            # TODO understand the augmentation domains
+            pooled_domains = self.generate_candidates(pooled_domains)  # -> (batch, channels, n_dw * n_dh * (aug + 1), rh, rw)
 
+        # Repeat the pooled domains to match the number of range patches
+        # i.e. (batch, channels, n_dw * n_dh, rh, rw) -> (batch, channels, n_dw * n_dh, n_ranges, rh, rw)
         pooled_domains = repeat(pooled_domains, 'b c d h w -> b c d r h w', r=self.n_ranges)
+        # 直观地说，现在我们有batch个、分成c个channel的，每个channel上从domain数映射到range数的小方块
+        # 每个domain方块（比如1个或者4个）都会被映射到每个range小方块（很多，125 * 125个）
 
         # Apply the affine maps to domain patches
+        # in detail:
+        # - pooled_domains: (batch, channels, n_dw * n_dh, n_ranges, rh, rw)
+        # - weight: (batch, channels, n_domains, n_ranges)
+        # -> range domains: (batch, channels, n_ranges, rh, rw)
+        # NOTES:
+        # the d in the weight is n_domains = n_dw * n_dh * (aug + 1), but the d in the pooled_domains is n_dw * n_dh. It used several domain patches to sum to one range patch by weight.
         range_domains = torch.einsum('bcdrhw, bcdr -> bcrhw', pooled_domains, weight)
+        # 直观地说，我们通过对domain方块按conv mixer建模出来的weight进行加权叠加后，得到了 125 * 125个 3*3的range方块
+        # TODO: here the weight is not guaranteed to be positive, so the range_domains may be negative
+        #  also, the weight is not guaranteed to sum to 1, so the range_domains may be larger than 1
         range_domains = range_domains + bias[:, :, :, None, None]
 
         # Reconstruct data by "composing" the output patches back together (collage!).
@@ -84,7 +99,7 @@ class CollageOperator2d(nn.Module):
         # It does not matter which initial condition is chosen, so long as the dimensions match.
         # The fixed-point of a Collage Operator is uniquely determined* by the fractal code
         # *: and auxiliary learned patches, if any.
-        z = torch.randn(B, C, H * superres_factor, W * superres_factor).to(x.device)
+        z = torch.randn(B, C, H * superres_factor, W * superres_factor).to(x.device)  # any random initial condition
         # superres_factor > 1 allows to decode at higher resolutions than the input resolution.
         for _ in range(decode_steps):
             z = self._decode_step(z, co_w, co_bias, superres_factor)
@@ -104,6 +119,7 @@ class CollageOperator2d(nn.Module):
 
         # calculate the factor of domain's height to range's height
         h_factors, w_factors = dh // rh, dw // rw  # Notes: this limit the domain size / range size to be integer
+        # notes: the factors are only for the pooling layer, which is used to shrink the domain patches to range size
         n_rh, n_rw = input_res // rh, input_res // rw
         n_ranges = n_rh * n_rw
         return n_dh, n_dw, n_rh, n_rw, h_factors, w_factors, n_domains, n_ranges
@@ -116,9 +132,12 @@ class NeuralCollageOperator2d(nn.Module):
         # In a Collage Operator, the affine map requires a single scalar weight 
         # for each pair of domain and range patches, and a single scalar bias for each range.
         # `net` learns to output these weights based on the objective.
+
+        # a_{k, n} = (#domains * #ranges * 3)
         self.co_w_dim = self.co.n_domains * self.co.n_ranges * out_channels
+        # b_{k, n} = (# ranges * 3)   only depend on the number of range cells
         self.co_bias_dim = self.co.n_ranges * out_channels
-        tot_out_dim = self.co_w_dim + self.co_bias_dim
+        tot_out_dim = self.co_w_dim + self.co_bias_dim  # total parameters
 
         # Does not need to be a ConvMixer: for deep generative Neural Collages `net` can be e.g, a VDVAE.
         if net is None:
@@ -129,13 +148,13 @@ class NeuralCollageOperator2d(nn.Module):
         self.tanh = nn.Tanh()
 
     def forward(self, x, decode_steps=10, superres_factor=1, return_co_code=False):
-        B, C, H, W = x.shape
-        co_code = self.net(x) # B, C, co_w_dim + co_mix_dim + co_bias_dim
+        B, C, H, W = x.shape  # batch, channels, height, width
+        co_code = self.net(x)  # B, tot_out_dim = B, (#d * #n * #c + #n * #c)
         co_w, co_bias = torch.split(co_code, [self.co_w_dim, self.co_bias_dim], dim=-1)
 
-        co_w = co_w.view(B, C, self.co.n_domains, self.co.n_ranges)
-        co_bias = co_bias.view(B, C, self.co.n_ranges)
-        co_bias = self.tanh(co_bias)
+        co_w = co_w.view(B, C, self.co.n_domains, self.co.n_ranges)  # a
+        co_bias = co_bias.view(B, C, self.co.n_ranges)  # b
+        co_bias = self.tanh(co_bias)  # keep the bias in [-1, 1] to avoid numerical issues in the affine map
         
         z = self.co(x, co_w, co_bias, decode_steps=decode_steps, superres_factor=superres_factor)
         
