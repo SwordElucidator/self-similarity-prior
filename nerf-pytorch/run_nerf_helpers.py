@@ -101,7 +101,7 @@ class NeRF(nn.Module):
             h = F.relu(h)
             if i in self.skips:
                 h = torch.cat([input_pts, h], -1)
-
+        # get h: (N_rays * N_samples, 256)
         if self.use_viewdirs:
             alpha = self.alpha_linear(h)
             feature = self.feature_linear(h)
@@ -111,12 +111,12 @@ class NeRF(nn.Module):
                 h = self.views_linears[i](h)
                 h = F.relu(h)
 
-            rgb = self.rgb_linear(h)
+            rgb = self.rgb_linear(h)  # (N_rays * N_samples, 3)
             outputs = torch.cat([rgb, alpha], -1)
         else:
             outputs = self.output_linear(h)
 
-        return outputs    
+        return outputs    # (N_rays * N_samples, 4=rgba)
 
     def load_weights_from_keras(self, weights):
         assert self.use_viewdirs, "Not implemented if use_viewdirs=False"
@@ -148,18 +148,26 @@ class NeRF(nn.Module):
         self.alpha_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear+1]))
 
 
-
 # Ray helpers
 def get_rays(H, W, K, c2w):
+    """
+    Get ray origins (O) and directions (D) for all pixels in the image.
+    K is the camera intrinsics matrix, used to transform from pixel coordinates to ray directions.
+    K = | fx   0   cx |
+        |  0  fy   cy |
+        |  0   0    1 |
+    (fx, fy): focal length; (cx, cy): principal point, which is the intersection of the optical axis with the image plane.
+    c2w is the camera-to-world transformation matrix.
+    """
     i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
     i = i.t()
     j = j.t()
-    dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
+    dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)  # calculate each pixcel's ray direction   (400, 400, 3)  with dirs[:, :, 2] = -1
     # Rotate ray directions from camera frame to the world frame
     rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
     rays_o = c2w[:3,-1].expand(rays_d.shape)
-    return rays_o, rays_d
+    return rays_o, rays_d  # the results are tensors with shape (H, W, 3), the o and d values for each pixel; 3 is the dimension of each ray
 
 
 def get_rays_np(H, W, K, c2w):
